@@ -11929,22 +11929,22 @@ function Sp({
               children: [
                 s.jsx("div", {
                   style: { gridColumn: "1/-1" },
-                  children: s.jsx(T, { l: "Nom complet", f: "nom_complet" }),
+                  children: T({ l: "Nom complet", f: "nom_complet" }),
                 }),
-                s.jsx(T, { l: "Téléphone", f: "telephone", type: "tel" }),
-                s.jsx(T, { l: "Téléphone 2", f: "telephone_2", type: "tel" }),
+                T({ l: "Téléphone", f: "telephone", type: "tel" }),
+                T({ l: "Téléphone 2", f: "telephone_2", type: "tel" }),
                 s.jsx("div", {
                   style: { gridColumn: "1/-1" },
-                  children: s.jsx(T, {
+                  children: T({
                     l: "Courriel",
                     f: "courriel",
                     type: "email",
                   }),
                 }),
-                s.jsx(T, { l: "Adresse", f: "adresse" }),
-                s.jsx(T, { l: "Ville", f: "ville" }),
-                s.jsx(O, { l: "Région", f: "region", opts: Rc }),
-                s.jsx(T, { l: "Profession", f: "profession" }),
+                T({ l: "Adresse", f: "adresse" }),
+                T({ l: "Ville", f: "ville" }),
+                O({ l: "Région", f: "region", opts: Rc }),
+                T({ l: "Profession", f: "profession" }),
               ],
             }),
             s.jsx("p", { style: j, children: "Statut & Assignation" }),
@@ -11955,14 +11955,14 @@ function Sp({
                 gap: 12,
               },
               children: [
-                s.jsx(O, { l: "Statut", f: "statut", opts: dn }),
-                s.jsx(O, {
+                O({ l: "Statut", f: "statut", opts: dn }),
+                O({
                   l: "Dernier appelant",
                   f: "dernier_appelant",
                   opts: i,
                 }),
-                s.jsx(T, { l: "Conseiller assigné", f: "nom_conseiller" }),
-                s.jsx(T, { l: "Client référent", f: "client_referent" }),
+                T({ l: "Conseiller assigné", f: "nom_conseiller" }),
+                T({ l: "Client référent", f: "client_referent" }),
                 s.jsxs("div", {
                   children: [
                     s.jsx("label", { style: v, children: "Date RDV" }),
@@ -12021,8 +12021,8 @@ function Sp({
                 gap: 12,
               },
               children: [
-                s.jsx(T, { l: "Référé par", f: "refere_par" }),
-                s.jsx(T, {
+                T({ l: "Référé par", f: "refere_par" }),
+                T({
                   l: "Tél. référent",
                   f: "telephone_referent",
                   type: "tel",
@@ -12037,12 +12037,12 @@ function Sp({
                 gap: 12,
               },
               children: [
-                s.jsx(T, { l: "Nb adultes", f: "nb_adultes", type: "number" }),
-                s.jsx(T, { l: "Nb enfants", f: "nb_enfants", type: "number" }),
-                s.jsx(T, { l: "Déjà congelé", f: "deja_congelo" }),
+                T({ l: "Nb adultes", f: "nb_adultes", type: "number" }),
+                T({ l: "Nb enfants", f: "nb_enfants", type: "number" }),
+                T({ l: "Déjà congelé", f: "deja_congelo" }),
                 s.jsx("div", {
                   style: { gridColumn: "1/-1" },
-                  children: s.jsx(T, { l: "Produit / Place", f: "place" }),
+                  children: T({ l: "Produit / Place", f: "place" }),
                 }),
               ],
             }),
