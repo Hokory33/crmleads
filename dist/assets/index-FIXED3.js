@@ -12709,6 +12709,535 @@ function Cp({ leads: e, onClick: t }) {
     }),
   });
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   METRICS DASHBOARD — Admin-only analytics page
+   Pure SVG charts, no external dependencies
+   ═══════════════════════════════════════════════════════════════ */
+function MetricsDashboard({ leads, statuts }) {
+  const [period, setPeriod] = N.useState("30d");
+  const now = new Date();
+
+  // ── Time filter ──
+  const cutoff = period === "7d" ? new Date(now - 7*86400000)
+               : period === "30d" ? new Date(now - 30*86400000)
+               : new Date(now.getFullYear(), 0, 1);
+
+  const filtered = leads.filter(r => {
+    const dt = new Date(r.created_at || r.date_ajout);
+    return dt >= cutoff && dt <= now;
+  });
+
+  // ── Status counts ──
+  const statusCounts = {};
+  statuts.forEach(st => statusCounts[st] = 0);
+  filtered.forEach(r => { const s = st(r.statut); if(statusCounts[s] !== undefined) statusCounts[s]++; });
+
+  const statusColors = {
+    "Nouvelle référence": "#60a5fa",
+    "Premier appel": "#fbbf24",
+    "Deuxième appel": "#f97316",
+    "Troisième appel": "#f87171",
+    "Qualifié": "#4ade80",
+    "Envoyé au dispatch": "#a78bfa",
+    "Mort": "#525252"
+  };
+
+  // ── Daily buckets ──
+  const dayCount = period === "7d" ? 7 : period === "30d" ? 30 : Math.ceil((now - cutoff) / 86400000);
+  const buckets = [];
+  for (let i = 0; i < dayCount; i++) {
+    const dayStart = new Date(cutoff.getTime() + i * 86400000);
+    const dayEnd = new Date(dayStart.getTime() + 86400000);
+    const dayLeads = filtered.filter(r => {
+      const dt = new Date(r.created_at || r.date_ajout);
+      return dt >= dayStart && dt < dayEnd;
+    });
+    buckets.push({
+      date: dayStart,
+      label: dayStart.toLocaleDateString("fr-CA", { day: "2-digit", month: "short" }),
+      total: dayLeads.length,
+      nouvelles: dayLeads.filter(r => st(r.statut) === "Nouvelle référence").length,
+      closed: dayLeads.filter(r => ["Qualifié","Envoyé au dispatch"].includes(st(r.statut))).length,
+      morts: dayLeads.filter(r => st(r.statut) === "Mort").length,
+      p1: dayLeads.filter(r => st(r.statut) === "Premier appel").length,
+      p2: dayLeads.filter(r => st(r.statut) === "Deuxième appel").length,
+      p3: dayLeads.filter(r => st(r.statut) === "Troisième appel").length,
+    });
+  }
+
+  // ── KPI calculations ──
+  const totalLeads = filtered.length;
+  const closedLeads = filtered.filter(r => ["Qualifié","Envoyé au dispatch"].includes(st(r.statut))).length;
+  const conversionRate = totalLeads ? Math.round((closedLeads / totalLeads) * 100) : 0;
+  const mortRate = totalLeads ? Math.round((statusCounts["Mort"] / totalLeads) * 100) : 0;
+  const avgPerDay = dayCount ? (totalLeads / dayCount).toFixed(1) : 0;
+
+  // ── Predictions ──
+  const recentDays = Math.min(14, buckets.length);
+  const recentBuckets = buckets.slice(-recentDays);
+  const avgRecent = recentDays ? recentBuckets.reduce((a, b) => a + b.total, 0) / recentDays : 0;
+  const avgClosedRecent = recentDays ? recentBuckets.reduce((a, b) => a + b.closed, 0) / recentDays : 0;
+  const predDays = period === "year" ? 365 - dayCount : 30;
+  const predNewLeads = Math.round(avgRecent * predDays);
+  const predClosed = Math.round(avgClosedRecent * predDays);
+
+  // ── Cumulative data for line chart ──
+  let cumTotal = 0, cumClosed = 0;
+  const cumBuckets = buckets.map(b => {
+    cumTotal += b.total;
+    cumClosed += b.closed;
+    return { ...b, cumTotal, cumClosed };
+  });
+
+  // ── SVG helpers ──
+  const W = 700, H = 220, PAD = 40, PADT = 20;
+  const chartW = W - PAD * 2, chartH = H - PAD - PADT;
+
+  function makePath(data, key, smooth) {
+    if (!data.length) return "";
+    const maxV = Math.max(...data.map(d => d[key]), 1);
+    const pts = data.map((d, i) => ({
+      x: PAD + (i / Math.max(data.length - 1, 1)) * chartW,
+      y: PADT + chartH - (d[key] / maxV) * chartH
+    }));
+    if (smooth && pts.length > 2) {
+      let path = `M${pts[0].x},${pts[0].y}`;
+      for (let i = 0; i < pts.length - 1; i++) {
+        const cp1x = pts[i].x + (pts[Math.min(i+1, pts.length-1)].x - pts[Math.max(i-1,0)].x) / 6;
+        const cp1y = pts[i].y + (pts[Math.min(i+1, pts.length-1)].y - pts[Math.max(i-1,0)].y) / 6;
+        const cp2x = pts[i+1].x - (pts[Math.min(i+2, pts.length-1)].x - pts[i].x) / 6;
+        const cp2y = pts[i+1].y - (pts[Math.min(i+2, pts.length-1)].y - pts[i].y) / 6;
+        path += ` C${cp1x},${cp1y} ${cp2x},${cp2y} ${pts[i+1].x},${pts[i+1].y}`;
+      }
+      return path;
+    }
+    return pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  }
+
+  function makeArea(data, key) {
+    if (!data.length) return "";
+    const maxV = Math.max(...data.map(d => d[key]), 1);
+    const pts = data.map((d, i) => ({
+      x: PAD + (i / Math.max(data.length - 1, 1)) * chartW,
+      y: PADT + chartH - (d[key] / maxV) * chartH
+    }));
+    const baseline = PADT + chartH;
+    return `M${pts[0].x},${baseline} ` + pts.map(p => `L${p.x},${p.y}`).join(" ") + ` L${pts[pts.length-1].x},${baseline} Z`;
+  }
+
+  function gridLines(data, key) {
+    const maxV = Math.max(...data.map(d => d[key]), 1);
+    const step = maxV <= 5 ? 1 : maxV <= 20 ? 5 : Math.ceil(maxV / 4 / 5) * 5;
+    const lines = [];
+    for (let v = 0; v <= maxV; v += step) {
+      const y = PADT + chartH - (v / maxV) * chartH;
+      lines.push({ y, label: v });
+    }
+    return lines;
+  }
+
+  // ── Prediction line (extend cumulative) ──
+  const predBuckets = [];
+  if (cumBuckets.length > 0) {
+    let lastCum = cumBuckets[cumBuckets.length - 1].cumTotal;
+    let lastClosed = cumBuckets[cumBuckets.length - 1].cumClosed;
+    for (let i = 1; i <= Math.min(predDays, 30); i++) {
+      predBuckets.push({
+        cumTotal: lastCum + Math.round(avgRecent * i),
+        cumClosed: lastClosed + Math.round(avgClosedRecent * i),
+      });
+    }
+  }
+
+  // ── Style constants ──
+  const cardStyle = {
+    background: d.card,
+    borderRadius: 12,
+    border: `1px solid ${d.border}`,
+    padding: "18px 22px",
+  };
+  const periodBtn = (val, label) =>
+    s.jsx("button", {
+      onClick: () => setPeriod(val),
+      style: {
+        padding: "6px 16px",
+        borderRadius: 6,
+        border: period === val ? `1px solid ${d.or}` : `1px solid ${d.border}`,
+        background: period === val ? `${d.or}22` : "transparent",
+        color: period === val ? d.or : d.txtS,
+        fontWeight: period === val ? 800 : 600,
+        fontSize: 12,
+        cursor: "pointer",
+        fontFamily: "inherit",
+        transition: "all .15s",
+      },
+      children: label,
+    }, val);
+
+  const kpiCard = (label, value, sub, color) =>
+    s.jsxs("div", {
+      style: {
+        ...cardStyle,
+        flex: 1,
+        minWidth: 150,
+        textAlign: "center",
+      },
+      children: [
+        s.jsx("div", {
+          style: { fontSize: 11, color: d.txtM, fontWeight: 700, textTransform: "uppercase", letterSpacing: "1px", marginBottom: 8 },
+          children: label,
+        }),
+        s.jsx("div", {
+          style: { fontSize: 32, fontWeight: 900, color: color || d.or, textShadow: `0 0 20px ${color || d.or}44`, lineHeight: 1 },
+          children: value,
+        }),
+        sub && s.jsx("div", {
+          style: { fontSize: 11, color: d.txtM, marginTop: 6 },
+          children: sub,
+        }),
+      ],
+    }, label);
+
+  // ── Render ──
+  return s.jsxs("div", {
+    style: { padding: "24px 28px", overflowY: "auto", height: "100%", animation: "fadeUp .3s ease" },
+    children: [
+      // Header
+      s.jsxs("div", {
+        style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 },
+        children: [
+          s.jsxs("div", { children: [
+            s.jsx("h1", {
+              style: { fontSize: 22, fontWeight: 900, color: d.txt, letterSpacing: ".5px", margin: 0, fontFamily: "'Barlow Condensed', sans-serif", textTransform: "uppercase" },
+              children: "Tableau de bord",
+            }),
+            s.jsx("div", { style: { fontSize: 12, color: d.txtM, marginTop: 2 }, children: `${filtered.length} références sur la période` }),
+          ]}),
+          s.jsxs("div", {
+            style: { display: "flex", gap: 6 },
+            children: [periodBtn("7d", "7 jours"), periodBtn("30d", "30 jours"), periodBtn("year", "Cette année")],
+          }),
+        ],
+      }),
+
+      // KPI row
+      s.jsxs("div", {
+        style: { display: "flex", gap: 14, marginBottom: 24, flexWrap: "wrap" },
+        children: [
+          kpiCard("Total refs", totalLeads, `${avgPerDay} / jour`, "#60a5fa"),
+          kpiCard("Conversion", `${conversionRate}%`, `${closedLeads} qualifiés + dispatch`, "#4ade80"),
+          kpiCard("Taux mort", `${mortRate}%`, `${statusCounts["Mort"] || 0} perdus`, "#f87171"),
+          kpiCard("Moy / jour", avgPerDay, `sur ${dayCount} jours`, d.or),
+        ],
+      }),
+
+      // Charts row 1: Pipeline + Activity
+      s.jsxs("div", {
+        style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 },
+        children: [
+          // ── Pipeline bar chart ──
+          s.jsxs("div", {
+            style: cardStyle,
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Pipeline par statut",
+              }),
+              s.jsx("svg", {
+                width: "100%",
+                viewBox: `0 0 ${W} ${H}`,
+                children: s.jsxs("g", { children: (() => {
+                  const entries = statuts.map(st => ({ name: st, count: statusCounts[st] || 0, color: statusColors[st] || "#666" }));
+                  const maxV = Math.max(...entries.map(e => e.count), 1);
+                  const barW = chartW / entries.length * 0.6;
+                  const gap = chartW / entries.length;
+                  const els = [];
+                  // grid
+                  const step = maxV <= 5 ? 1 : maxV <= 20 ? 5 : Math.ceil(maxV / 4 / 5) * 5;
+                  for (let v = 0; v <= maxV; v += step) {
+                    const y = PADT + chartH - (v / maxV) * chartH;
+                    els.push(s.jsx("line", { x1: PAD, y1: y, x2: W - PAD, y2: y, stroke: d.border, strokeWidth: 0.5 }, `g${v}`));
+                    els.push(s.jsx("text", { x: PAD - 6, y: y + 3, fill: d.txtM, fontSize: 9, textAnchor: "end", children: v }, `gl${v}`));
+                  }
+                  // bars
+                  entries.forEach((e, i) => {
+                    const x = PAD + i * gap + (gap - barW) / 2;
+                    const barH = (e.count / maxV) * chartH;
+                    const y = PADT + chartH - barH;
+                    els.push(s.jsx("rect", {
+                      x, y, width: barW, height: barH, rx: 4,
+                      fill: e.color, opacity: 0.85,
+                    }, `b${i}`));
+                    els.push(s.jsx("text", {
+                      x: x + barW / 2, y: y - 6, fill: e.color, fontSize: 11, fontWeight: 800, textAnchor: "middle",
+                      children: e.count,
+                    }, `bv${i}`));
+                    // label (abbreviated)
+                    const short = e.name.length > 10 ? e.name.slice(0, 9) + "…" : e.name;
+                    els.push(s.jsx("text", {
+                      x: x + barW / 2, y: H - 4, fill: d.txtM, fontSize: 8, textAnchor: "middle",
+                      children: short,
+                    }, `bl${i}`));
+                  });
+                  return els;
+                })() }),
+              }),
+            ],
+          }),
+
+          // ── Activity line chart ──
+          s.jsxs("div", {
+            style: cardStyle,
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Activité quotidienne",
+              }),
+              s.jsxs("svg", {
+                width: "100%",
+                viewBox: `0 0 ${W} ${H}`,
+                children: (() => {
+                  const maxV = Math.max(...buckets.map(b => b.total), 1);
+                  const els = [];
+                  // grid
+                  gridLines(buckets, "total").forEach(({ y, label }, i) => {
+                    els.push(s.jsx("line", { x1: PAD, y1: y, x2: W - PAD, y2: y, stroke: d.border, strokeWidth: 0.5 }, `ag${i}`));
+                    els.push(s.jsx("text", { x: PAD - 6, y: y + 3, fill: d.txtM, fontSize: 9, textAnchor: "end", children: label }, `agl${i}`));
+                  });
+                  // area fills
+                  els.push(s.jsx("path", { d: makeArea(buckets, "total"), fill: "#60a5fa11" }, "areaN"));
+                  els.push(s.jsx("path", { d: makeArea(buckets, "closed"), fill: "#4ade8011" }, "areaC"));
+                  // lines
+                  els.push(s.jsx("path", { d: makePath(buckets, "total", true), fill: "none", stroke: "#60a5fa", strokeWidth: 2 }, "lineN"));
+                  els.push(s.jsx("path", { d: makePath(buckets, "closed", true), fill: "none", stroke: "#4ade80", strokeWidth: 2 }, "lineC"));
+                  els.push(s.jsx("path", { d: makePath(buckets, "morts", true), fill: "none", stroke: "#525252", strokeWidth: 1.5, strokeDasharray: "4 3" }, "lineM"));
+                  // x labels
+                  const labelEvery = Math.max(1, Math.floor(buckets.length / 8));
+                  buckets.forEach((b, i) => {
+                    if (i % labelEvery === 0) {
+                      const x = PAD + (i / Math.max(buckets.length - 1, 1)) * chartW;
+                      els.push(s.jsx("text", { x, y: H - 4, fill: d.txtM, fontSize: 8, textAnchor: "middle", children: b.label }, `xl${i}`));
+                    }
+                  });
+                  // legend
+                  els.push(s.jsx("circle", { cx: W - 180, cy: 10, r: 4, fill: "#60a5fa" }, "ln1"));
+                  els.push(s.jsx("text", { x: W - 172, y: 13, fill: d.txtS, fontSize: 9, children: "Nouvelles" }, "lt1"));
+                  els.push(s.jsx("circle", { cx: W - 110, cy: 10, r: 4, fill: "#4ade80" }, "ln2"));
+                  els.push(s.jsx("text", { x: W - 102, y: 13, fill: d.txtS, fontSize: 9, children: "Fermées" }, "lt2"));
+                  els.push(s.jsx("circle", { cx: W - 55, cy: 10, r: 4, fill: "#525252" }, "ln3"));
+                  els.push(s.jsx("text", { x: W - 47, y: 13, fill: d.txtS, fontSize: 9, children: "Morts" }, "lt3"));
+                  return els;
+                })(),
+              }),
+            ],
+          }),
+        ],
+      }),
+
+      // Charts row 2: Call progression + Conversion funnel
+      s.jsxs("div", {
+        style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 },
+        children: [
+          // ── Call progression stacked area ──
+          s.jsxs("div", {
+            style: cardStyle,
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Progression des appels",
+              }),
+              s.jsxs("svg", {
+                width: "100%",
+                viewBox: `0 0 ${W} ${H}`,
+                children: (() => {
+                  const maxV = Math.max(...buckets.map(b => b.p1 + b.p2 + b.p3), 1);
+                  const els = [];
+                  gridLines(buckets.map(b => ({ v: b.p1 + b.p2 + b.p3 })), "v").forEach(({ y, label }, i) => {
+                    els.push(s.jsx("line", { x1: PAD, y1: y, x2: W - PAD, y2: y, stroke: d.border, strokeWidth: 0.5 }, `cg${i}`));
+                    els.push(s.jsx("text", { x: PAD - 6, y: y + 3, fill: d.txtM, fontSize: 9, textAnchor: "end", children: label }, `cgl${i}`));
+                  });
+                  // stacked bars
+                  const barW2 = chartW / Math.max(buckets.length, 1) * 0.7;
+                  const gap2 = chartW / Math.max(buckets.length, 1);
+                  buckets.forEach((b, i) => {
+                    const x = PAD + i * gap2 + (gap2 - barW2) / 2;
+                    const total = b.p1 + b.p2 + b.p3;
+                    let yOff = PADT + chartH;
+                    [{ v: b.p1, c: "#fbbf24" }, { v: b.p2, c: "#f97316" }, { v: b.p3, c: "#f87171" }].forEach(({ v, c }, j) => {
+                      const h = maxV ? (v / maxV) * chartH : 0;
+                      yOff -= h;
+                      els.push(s.jsx("rect", { x, y: yOff, width: barW2, height: h, fill: c, opacity: 0.8, rx: j === 2 ? 3 : 0 }, `cs${i}${j}`));
+                    });
+                  });
+                  // legend
+                  els.push(s.jsx("rect", { x: W - 200, y: 6, width: 10, height: 10, rx: 2, fill: "#fbbf24" }, "cl1"));
+                  els.push(s.jsx("text", { x: W - 186, y: 15, fill: d.txtS, fontSize: 9, children: "1er appel" }, "clt1"));
+                  els.push(s.jsx("rect", { x: W - 130, y: 6, width: 10, height: 10, rx: 2, fill: "#f97316" }, "cl2"));
+                  els.push(s.jsx("text", { x: W - 116, y: 15, fill: d.txtS, fontSize: 9, children: "2e appel" }, "clt2"));
+                  els.push(s.jsx("rect", { x: W - 65, y: 6, width: 10, height: 10, rx: 2, fill: "#f87171" }, "cl3"));
+                  els.push(s.jsx("text", { x: W - 51, y: 15, fill: d.txtS, fontSize: 9, children: "3e appel" }, "clt3"));
+                  return els;
+                })(),
+              }),
+            ],
+          }),
+
+          // ── Conversion funnel ──
+          s.jsxs("div", {
+            style: cardStyle,
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Entonnoir de conversion",
+              }),
+              s.jsx("div", {
+                style: { display: "flex", flexDirection: "column", gap: 6 },
+                children: (() => {
+                  const funnelData = [
+                    { name: "Nouvelle référence", count: statusCounts["Nouvelle référence"] || 0, color: "#60a5fa" },
+                    { name: "Premier appel", count: statusCounts["Premier appel"] || 0, color: "#fbbf24" },
+                    { name: "Deuxième appel", count: statusCounts["Deuxième appel"] || 0, color: "#f97316" },
+                    { name: "Troisième appel", count: statusCounts["Troisième appel"] || 0, color: "#f87171" },
+                    { name: "Qualifié", count: statusCounts["Qualifié"] || 0, color: "#4ade80" },
+                    { name: "Dispatch", count: statusCounts["Envoyé au dispatch"] || 0, color: "#a78bfa" },
+                  ];
+                  const maxF = Math.max(...funnelData.map(f => f.count), 1);
+                  return funnelData.map((f, i) =>
+                    s.jsxs("div", {
+                      style: { display: "flex", alignItems: "center", gap: 10 },
+                      children: [
+                        s.jsx("div", {
+                          style: { width: 100, fontSize: 10, color: d.txtS, fontWeight: 600, textAlign: "right", flexShrink: 0 },
+                          children: f.name,
+                        }),
+                        s.jsx("div", {
+                          style: { flex: 1, background: `${d.border}44`, borderRadius: 4, height: 22, position: "relative", overflow: "hidden" },
+                          children: s.jsx("div", {
+                            style: {
+                              width: `${(f.count / maxF) * 100}%`,
+                              height: "100%",
+                              background: `linear-gradient(90deg, ${f.color}cc, ${f.color}88)`,
+                              borderRadius: 4,
+                              transition: "width .5s ease",
+                              minWidth: f.count > 0 ? 4 : 0,
+                            },
+                          }),
+                        }),
+                        s.jsx("div", {
+                          style: { width: 36, fontSize: 12, fontWeight: 900, color: f.color, textAlign: "right", textShadow: `0 0 8px ${f.color}44` },
+                          children: f.count,
+                        }),
+                      ],
+                    }, f.name)
+                  );
+                })(),
+              }),
+            ],
+          }),
+        ],
+      }),
+
+      // Charts row 3: Cumulative + Predictions
+      s.jsxs("div", {
+        style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 16 },
+        children: [
+          // ── Cumulative line ──
+          s.jsxs("div", {
+            style: cardStyle,
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Progression cumulée",
+              }),
+              s.jsxs("svg", {
+                width: "100%",
+                viewBox: `0 0 ${W} ${H}`,
+                children: (() => {
+                  const maxV = Math.max(...cumBuckets.map(b => b.cumTotal), 1);
+                  const els = [];
+                  gridLines(cumBuckets, "cumTotal").forEach(({ y, label }, i) => {
+                    els.push(s.jsx("line", { x1: PAD, y1: y, x2: W - PAD, y2: y, stroke: d.border, strokeWidth: 0.5 }, `pg${i}`));
+                    els.push(s.jsx("text", { x: PAD - 6, y: y + 3, fill: d.txtM, fontSize: 9, textAnchor: "end", children: label }, `pgl${i}`));
+                  });
+                  els.push(s.jsx("path", { d: makeArea(cumBuckets, "cumTotal"), fill: `${d.or}11` }, "cumArea"));
+                  els.push(s.jsx("path", { d: makePath(cumBuckets, "cumTotal", true), fill: "none", stroke: d.or, strokeWidth: 2.5 }, "cumLine"));
+                  els.push(s.jsx("path", { d: makePath(cumBuckets, "cumClosed", true), fill: "none", stroke: "#4ade80", strokeWidth: 2 }, "cumClosed"));
+                  // x labels
+                  const labelEvery = Math.max(1, Math.floor(cumBuckets.length / 8));
+                  cumBuckets.forEach((b, i) => {
+                    if (i % labelEvery === 0) {
+                      const x = PAD + (i / Math.max(cumBuckets.length - 1, 1)) * chartW;
+                      els.push(s.jsx("text", { x, y: H - 4, fill: d.txtM, fontSize: 8, textAnchor: "middle", children: b.label }, `pxl${i}`));
+                    }
+                  });
+                  els.push(s.jsx("circle", { cx: W - 150, cy: 10, r: 4, fill: d.or }, "pln1"));
+                  els.push(s.jsx("text", { x: W - 142, y: 13, fill: d.txtS, fontSize: 9, children: "Total cumulé" }, "plt1"));
+                  els.push(s.jsx("circle", { cx: W - 65, cy: 10, r: 4, fill: "#4ade80" }, "pln2"));
+                  els.push(s.jsx("text", { x: W - 57, y: 13, fill: d.txtS, fontSize: 9, children: "Fermées" }, "plt2"));
+                  return els;
+                })(),
+              }),
+            ],
+          }),
+
+          // ── Predictions card ──
+          s.jsxs("div", {
+            style: { ...cardStyle, display: "flex", flexDirection: "column", justifyContent: "space-between" },
+            children: [
+              s.jsx("div", {
+                style: { fontSize: 13, fontWeight: 800, color: d.txt, marginBottom: 16, textTransform: "uppercase", letterSpacing: ".5px" },
+                children: "Prédictions",
+              }),
+              s.jsxs("div", {
+                style: { display: "flex", flexDirection: "column", gap: 14, flex: 1, justifyContent: "center" },
+                children: [
+                  s.jsxs("div", {
+                    style: { background: `${d.or}0d`, borderRadius: 10, padding: "14px 18px", border: `1px solid ${d.or}22` },
+                    children: [
+                      s.jsx("div", { style: { fontSize: 10, color: d.txtM, fontWeight: 700, textTransform: "uppercase", marginBottom: 6, letterSpacing: ".5px" }, children: `Prochains ${predDays} jours (tendance)` }),
+                      s.jsxs("div", { style: { display: "flex", gap: 24 }, children: [
+                        s.jsxs("div", { children: [
+                          s.jsx("div", { style: { fontSize: 28, fontWeight: 900, color: d.or, lineHeight: 1 }, children: `+${predNewLeads}` }),
+                          s.jsx("div", { style: { fontSize: 10, color: d.txtM }, children: "nouvelles refs" }),
+                        ]}),
+                        s.jsxs("div", { children: [
+                          s.jsx("div", { style: { fontSize: 28, fontWeight: 900, color: "#4ade80", lineHeight: 1 }, children: `+${predClosed}` }),
+                          s.jsx("div", { style: { fontSize: 10, color: d.txtM }, children: "conversions" }),
+                        ]}),
+                      ]}),
+                    ],
+                  }),
+                  s.jsxs("div", {
+                    style: { background: `#60a5fa0d`, borderRadius: 10, padding: "14px 18px", border: "1px solid #60a5fa22" },
+                    children: [
+                      s.jsx("div", { style: { fontSize: 10, color: d.txtM, fontWeight: 700, textTransform: "uppercase", marginBottom: 6, letterSpacing: ".5px" }, children: "Projection fin d'année" }),
+                      s.jsxs("div", { style: { display: "flex", gap: 24 }, children: [
+                        s.jsxs("div", { children: [
+                          s.jsx("div", { style: { fontSize: 28, fontWeight: 900, color: "#60a5fa", lineHeight: 1 }, children: Math.round(leads.length + avgRecent * ((365 - dayCount > 0 ? 365 - dayCount : 30))) }),
+                          s.jsx("div", { style: { fontSize: 10, color: d.txtM }, children: "total estimé" }),
+                        ]}),
+                        s.jsxs("div", { children: [
+                          s.jsx("div", { style: { fontSize: 28, fontWeight: 900, color: "#4ade80", lineHeight: 1 }, children: `${conversionRate}%` }),
+                          s.jsx("div", { style: { fontSize: 10, color: d.txtM }, children: "taux conversion" }),
+                        ]}),
+                      ]}),
+                    ],
+                  }),
+                  s.jsx("div", {
+                    style: { fontSize: 10, color: d.txtM, fontStyle: "italic", textAlign: "center", marginTop: 4 },
+                    children: `Basé sur la moyenne des ${recentDays} derniers jours (${avgRecent.toFixed(1)} refs/jour)`,
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+}
+
 function Ep() {
   const [e, t] = N.useState(() => {
       try {
@@ -13208,6 +13737,23 @@ function Ep() {
                           x2: "3.01",
                           y2: "18",
                         }),
+                      ],
+                    }),
+                  ),
+                  (l == null ? void 0 : l.is_admin) && rs(
+                    "metrics",
+                    "Métriques",
+                    s.jsxs("svg", {
+                      width: "14",
+                      height: "14",
+                      fill: "none",
+                      stroke: "currentColor",
+                      strokeWidth: "2.2",
+                      viewBox: "0 0 24 24",
+                      children: [
+                        s.jsx("path", { d: "M18 20V10" }),
+                        s.jsx("path", { d: "M12 20V4" }),
+                        s.jsx("path", { d: "M6 20v-6" }),
                       ],
                     }),
                   ),
@@ -13897,16 +14443,21 @@ function Ep() {
                           }),
                         ],
                       })
-                    : w === "kanban"
-                      ? s.jsx(jp, {
-                          leads: Ol,
-                          onCardClick: (S) => T({ mode: "view", lead: S }),
-                          onStatusChange: tt,
+                    : w === "metrics"
+                      ? s.jsx(MetricsDashboard, {
+                          leads: c,
+                          statuts: dn,
                         })
-                      : s.jsx(Cp, {
-                          leads: Ol,
-                          onClick: (S) => T({ mode: "view", lead: S }),
-                        }),
+                      : w === "kanban"
+                        ? s.jsx(jp, {
+                            leads: Ol,
+                            onCardClick: (S) => T({ mode: "view", lead: S }),
+                            onStatusChange: tt,
+                          })
+                        : s.jsx(Cp, {
+                            leads: Ol,
+                            onClick: (S) => T({ mode: "view", lead: S }),
+                          }),
               }),
             ],
           }),
